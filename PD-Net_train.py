@@ -84,16 +84,10 @@ def zsn2n_loss(
 
 def normalize_to_unit_interval(
     image: torch.Tensor,
-    low_pct: float = 1.0,
-    high_pct: float = 99.5,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    ''' 用分位数窗位而不是 min/max 定标，使各视角的等效噪声尺度一致。
-        不裁剪信号：落在窗外的值原样保留，反归一化仍然精确可逆。 '''
-    flat = image.reshape(-1)
-    lo = torch.quantile(flat, low_pct / 100.0)
-    hi = torch.quantile(flat, high_pct / 100.0)
-    value_min = lo.reshape(1, 1, 1, 1)
-    value_range = (hi - lo).clamp_min(1e-8).reshape(1, 1, 1, 1)
+    value_min = image.amin(dim=(-2, -1), keepdim=True)
+    value_max = image.amax(dim=(-2, -1), keepdim=True)
+    value_range = (value_max - value_min).clamp_min(1e-8)
     normalized = (image - value_min) / value_range
     return normalized, value_min, value_range
 
@@ -144,8 +138,7 @@ def denoise_single_projection(
     noisy = noisy.unsqueeze(0).unsqueeze(0).to(device)
     noisy, pad_h, pad_w = pad_to_even(noisy)
 
-    noisy_normalized, value_min, value_range = normalize_to_unit_interval(
-        noisy, args.norm_low_pct, args.norm_high_pct)
+    noisy_normalized, value_min, value_range = normalize_to_unit_interval(noisy)
 
     model = build_network(
         in_channels=1,
@@ -251,9 +244,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lambda_consistency", type=float, default=1.0)
     parser.add_argument("--log_interval", type=int, default=100)
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--norm_low_pct", type=float, default=1.0,
-                        help="定标下分位；配 --norm_high_pct 100 时退化为旧的 min/max")
-    parser.add_argument("--norm_high_pct", type=float, default=99.5)
     parser.add_argument("--disable_clamp", action="store_true")
     parser.add_argument("--save_models", action="store_true")
     return parser.parse_args()
@@ -270,6 +260,7 @@ def main() -> None:
     projections = load_projection_stack(args.input_tiff)
     print(f"Input stack: {projections.shape}")
     print(f"Device: {device}")
+    print(f"Backbone: {args.backbone}")
 
     denoised_stack = np.empty_like(projections, dtype=np.float32)
     log_rows = []
